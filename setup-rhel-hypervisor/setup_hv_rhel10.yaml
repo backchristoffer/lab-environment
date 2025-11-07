@@ -1,8 +1,112 @@
-- name: Setup RHEL10 HV
+---
+- name: Prepare RHEL 10 host for Virtualization and OpenShift
   hosts: all
+  become: yes
+  vars:
+    rhel_repos:
+      - rhel-10-for-x86_64-baseos-rpms
+      - rhel-10-for-x86_64-appstream-rpms
+      - fast-datapath-for-rhel-10-x86_64-rpms
+    rhel_packages:
+      - qemu-kvm
+      - libvirt
+      - virt-install
+      - virt-manager
+      - virt-viewer
+      - libguestfs-tools
+      - edk2-ovmf
+      - dnsmasq
+      - nfs-utils
+      - NetworkManager
+      - firewalld
+      - iproute
+      - iputils
+      - bind-utils
+      - ethtool
+      - tcpdump
+      - policycoreutils
+      - policycoreutils-python-utils
+      - selinux-policy
+      - selinux-policy-targeted
+      - sos
+      - psacct
+      - kexec-tools
+      - bash-completion
+      - lsof
+      - sysstat
+      - dmidecode
+      - rsyslog
+      - chrony
+      - dnf-plugins-core
+      - subscription-manager
+      - tar
+      - gzip
+      - bzip2
+      - xz
+      - unzip
+      - curl
+      - wget
+      - git
+      - jq
+      - python3
+      - lvm2
+      - device-mapper-persistent-data
+      - parted
+      - xfsprogs
+      - e2fsprogs
+      - podman
+      - buildah
+      - skopeo
+      - crun
+      - containers-common
+      - slirp4netns
+      - fuse-overlayfs
+      - conntrack-tools
+
   tasks:
-  - name: Check if host is UP
-    ansible.builtin.ping:
-  - name: Debug
-    ansible.builtin.debug:
-      msg: Host is UP
+    - name: Update packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+
+    - name: Enable required Red Hat repositories
+      ansible.builtin.command:
+        cmd: "subscription-manager repos --enable={{ item }}"
+      loop: "{{ rhel_repos }}"
+      register: repo_enable
+      changed_when: "'enabled' in repo_enable.stdout or 'is already enabled' in repo_enable.stdout"
+
+    - name: Install virtualization and OpenShift prerequisites
+      ansible.builtin.dnf:
+        name: "{{ rhel_packages }}"
+        state: present
+        update_cache: yes
+
+    - name: Install Red Hat group packages
+      ansible.builtin.command:
+        cmd: "dnf groupinstall -y 'Virtualization Host' 'Container Management'"
+
+    - name: Enable and start essential services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - libvirtd
+        - firewalld
+        - NetworkManager
+
+    - name: Verify KVM module is loaded
+      ansible.builtin.shell: lsmod | grep -q kvm
+      register: kvm_check
+      failed_when: kvm_check.rc != 0
+      changed_when: false
+
+    - name: Print confirmation
+      ansible.builtin.debug:
+        msg: "RHEL 10 host prepared successfully for virtualization and OpenShift workloads."
+    
+    - name: Update all packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
