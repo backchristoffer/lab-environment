@@ -1,0 +1,8 @@
+- name: Setup RHEL10 HV
+  hosts: all
+  tasks:
+  - name: Check if host is UP
+    ansible.builtin.ping:
+  - name: Debug
+    ansible.builtin.debug:
+      msg: Host is UP
