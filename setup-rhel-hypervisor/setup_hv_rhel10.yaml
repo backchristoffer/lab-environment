@@ -2,11 +2,16 @@
 - name: Prepare RHEL 10 host for Virtualization and OpenShift
   hosts: all
   become: yes
+
   vars:
+    # used for ocp prep only. reminder to update cli tool if needed. mirror points to z-stream
+    ocp_version: "4.18.13"
+
     rhel_repos:
       - rhel-10-for-x86_64-baseos-rpms
       - rhel-10-for-x86_64-appstream-rpms
       - fast-datapath-for-rhel-10-x86_64-rpms
+
     rhel_packages:
       - qemu-kvm
       - libvirt
@@ -65,48 +70,119 @@
 
   tasks:
     - name: Update packages
-      ansible.builtin.dnf:
+      dnf:
         name: "*"
         state: latest
 
-    - name: Enable required Red Hat repositories
-      ansible.builtin.command:
-        cmd: "subscription-manager repos --enable={{ item }}"
+    - name: Enable required RH repositories
+      command: "subscription-manager repos --enable={{ item }}"
       loop: "{{ rhel_repos }}"
       register: repo_enable
-      changed_when: "'enabled' in repo_enable.stdout or 'is already enabled' in repo_enable.stdout"
+      changed_when: "'enabled' in repo_enable.stdout or 'already' in repo_enable.stdout"
 
-    - name: Install virtualization and OpenShift prerequisites
-      ansible.builtin.dnf:
+    - name: Install virtualization and system packages
+      dnf:
         name: "{{ rhel_packages }}"
         state: present
         update_cache: yes
 
-    - name: Install Red Hat group packages
-      ansible.builtin.command:
-        cmd: "dnf groupinstall -y 'Virtualization Host' 'Container Management'"
+    - name: Install RHEL group packages
+      command: dnf groupinstall -y "Virtualization Host" "Container Management"
 
-    - name: Enable and start essential services
-      ansible.builtin.service:
+    - name: Enable and start core services
+      service:
         name: "{{ item }}"
-        state: started
         enabled: yes
+        state: started
       loop:
         - libvirtd
         - firewalld
         - NetworkManager
 
-    - name: Verify KVM module is loaded
-      ansible.builtin.shell: lsmod | grep -q kvm
+    - name: Create working directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "/tmp/ocp-{{ ocp_version }}"
+        - "/tmp/ocp-{{ ocp_version }}/client"
+        - "/tmp/ocp-{{ ocp_version }}/installer"
+
+    - name: Download oc client
+      get_url:
+        url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ ocp_version }}/openshift-client-linux.tar.gz"
+        dest: "/tmp/ocp-{{ ocp_version }}/client/client.tar.gz"
+        mode: "0644"
+        force: yes
+
+    - name: Download installer
+      get_url:
+        url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ ocp_version }}/openshift-install-linux.tar.gz"
+        dest: "/tmp/ocp-{{ ocp_version }}/installer/installer.tar.gz"
+        mode: "0644"
+        force: yes
+
+    - name: Extract oc client
+      unarchive:
+        src: "/tmp/ocp-{{ ocp_version }}/client/client.tar.gz"
+        dest: "/tmp/ocp-{{ ocp_version }}/client"
+        remote_src: yes
+
+    - name: Extract openshift-install
+      unarchive:
+        src: "/tmp/ocp-{{ ocp_version }}/installer/installer.tar.gz"
+        dest: "/tmp/ocp-{{ ocp_version }}/installer"
+        remote_src: yes
+
+    - name: Install oc binary
+      copy:
+        src: "/tmp/ocp-{{ ocp_version }}/client/oc"
+        dest: "/usr/local/bin/oc"
+        mode: "0755"
+        remote_src: yes
+
+    - name: Install kubectl binary
+      copy:
+        src: "/tmp/ocp-{{ ocp_version }}/client/kubectl"
+        dest: "/usr/local/bin/kubectl"
+        mode: "0755"
+        remote_src: yes
+
+    - name: Install openshift-install binary
+      copy:
+        src: "/tmp/ocp-{{ ocp_version }}/installer/openshift-install"
+        dest: "/usr/local/bin/openshift-install"
+        mode: "0755"
+        remote_src: yes
+
+    - name: Verify OCP bins
+      command: "{{ item }}"
+      loop:
+        - "/usr/local/bin/oc version"
+        - "/usr/local/bin/openshift-install version"
+      changed_when: false
+
+    - name: Verify KVM is loaded
+      shell: lsmod | grep -q kvm
       register: kvm_check
       failed_when: kvm_check.rc != 0
       changed_when: false
 
-    - name: Print confirmation
-      ansible.builtin.debug:
-        msg: "RHEL 10 host prepared successfully for virtualization and OpenShift workloads."
-    
-    - name: Update all packages
-      ansible.builtin.dnf:
+    - name: Update packages
+      dnf:
         name: "*"
         state: latest
+
+    - name: Reboot host after installation
+      reboot:
+        reboot_timeout: 1200
+        connect_timeout: 30
+        post_reboot_delay: 60  
+        test_command: whoami
+
+    - name: Print confirmation
+      debug:
+        msg: >
+          RHEL 10 host fully prepared for virtualization and
+          OpenShift {{ ocp_version }}.
