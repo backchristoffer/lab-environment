@@ -4,7 +4,6 @@
   become: yes
 
   vars:
-    # used for ocp prep only. reminder to update cli tool if needed. mirror points to z-stream
     ocp_version: "4.18.13"
 
     rhel_repos:
@@ -69,16 +68,22 @@
       - conntrack-tools
 
   tasks:
-    - name: Update packages
+    - name: Ensure host is not a guest VM (optional but recommended)
+      assert:
+        that:
+          - ansible_virtualization_role != "guest"
+        fail_msg: "Host appears to be a guest VM, not suitable as a KVM hypervisor."
+        success_msg: "Host is not a guest; OK for KVM."
+
+    - name: Enable required RH repositories
+      rhsm_repository:
+        name: "{{ rhel_repos }}"
+        state: enabled
+
+    - name: Update all packages to latest
       dnf:
         name: "*"
         state: latest
-
-    - name: Enable required RH repositories
-      command: "subscription-manager repos --enable={{ item }}"
-      loop: "{{ rhel_repos }}"
-      register: repo_enable
-      changed_when: "'enabled' in repo_enable.stdout or 'already' in repo_enable.stdout"
 
     - name: Install virtualization and system packages
       dnf:
@@ -87,7 +92,11 @@
         update_cache: yes
 
     - name: Install RHEL group packages
-      command: dnf groupinstall -y "Virtualization Host" "Container Management"
+      dnf:
+        name:
+          - "@Virtualization Host"
+          - "@Container Management"
+        state: present
 
     - name: Enable and start core services
       service:
@@ -114,26 +123,28 @@
         url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ ocp_version }}/openshift-client-linux.tar.gz"
         dest: "/tmp/ocp-{{ ocp_version }}/client/client.tar.gz"
         mode: "0644"
-        force: yes
+        force: no
 
     - name: Download installer
       get_url:
         url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ ocp_version }}/openshift-install-linux.tar.gz"
         dest: "/tmp/ocp-{{ ocp_version }}/installer/installer.tar.gz"
         mode: "0644"
-        force: yes
+        force: no
 
     - name: Extract oc client
       unarchive:
         src: "/tmp/ocp-{{ ocp_version }}/client/client.tar.gz"
         dest: "/tmp/ocp-{{ ocp_version }}/client"
         remote_src: yes
+        creates: "/tmp/ocp-{{ ocp_version }}/client/oc"
 
     - name: Extract openshift-install
       unarchive:
         src: "/tmp/ocp-{{ ocp_version }}/installer/installer.tar.gz"
         dest: "/tmp/ocp-{{ ocp_version }}/installer"
         remote_src: yes
+        creates: "/tmp/ocp-{{ ocp_version }}/installer/openshift-install"
 
     - name: Install oc binary
       copy:
@@ -156,29 +167,23 @@
         mode: "0755"
         remote_src: yes
 
-    - name: Verify OCP bins
+    - name: Verify OCP binaries
       command: "{{ item }}"
       loop:
         - "/usr/local/bin/oc version"
         - "/usr/local/bin/openshift-install version"
       changed_when: false
 
-    - name: Verify KVM is loaded
-      shell: lsmod | grep -q kvm
-      register: kvm_check
-      failed_when: kvm_check.rc != 0
+    - name: Verify kvm module exists
+      command: modinfo kvm
+      register: kvm_modinfo
       changed_when: false
-
-    - name: Update packages
-      dnf:
-        name: "*"
-        state: latest
 
     - name: Reboot host after installation
       reboot:
         reboot_timeout: 1200
         connect_timeout: 30
-        post_reboot_delay: 60  
+        post_reboot_delay: 60
         test_command: whoami
 
     - name: Print confirmation
