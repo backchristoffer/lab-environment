@@ -1,0 +1,78 @@
+ocp_libvirt_pool_name: "ocp_vms"
+ocp_vm_dir: "/home/ocp-vms"
+ocp_prov_bridge: "br_prov"
+ocp_prov_bridge_ip: "172.22.0.1"
+ocp_prov_bridge_prefix: 24
+api_vip: "172.22.0.5"
+ingress_vip: "172.22.0.6"
+
+
+ocp_hosts:
+  - { name: "{{ cluster_name }}-bootstrap", ip: "172.22.0.10", mac: "52:54:00:00:00:10" }
+  - { name: "{{ cluster_name }}-master-0", ip: "172.22.0.11", mac: "52:54:00:00:00:11" }
+  - { name: "{{ cluster_name }}-master-1", ip: "172.22.0.12", mac: "52:54:00:00:00:12" }
+  - { name: "{{ cluster_name }}-master-2", ip: "172.22.0.13", mac: "52:54:00:00:00:13" }
+  - { name: "{{ cluster_name }}-worker-0", ip: "172.22.0.21", mac: "52:54:00:00:00:21" }
+  - { name: "{{ cluster_name }}-worker-1", ip: "172.22.0.22", mac: "52:54:00:00:00:22" }
+
+rhel_repos:
+  - rhel-10-for-x86_64-baseos-rpms
+  - rhel-10-for-x86_64-appstream-rpms
+  - fast-datapath-for-rhel-10-x86_64-rpms
+
+rhel_packages:
+  - qemu-kvm
+  - libvirt
+  - virt-install
+  - virt-manager
+  - virt-viewer
+  - libguestfs-tools
+  - edk2-ovmf
+  - dnsmasq
+  - nfs-utils
+  - NetworkManager
+  - firewalld
+  - iproute
+  - iputils
+  - bind-utils
+  - ethtool
+  - tcpdump
+  - policycoreutils
+  - policycoreutils-python-utils
+  - selinux-policy
+  - selinux-policy-targeted
+  - sos
+  - psacct
+  - kexec-tools
+  - bash-completion
+  - lsof
+  - sysstat
+  - dmidecode
+  - rsyslog
+  - chrony
+  - dnf-plugins-core
+  - subscription-manager
+  - tar
+  - gzip
+  - bzip2
+  - xz
+  - unzip
+  - curl
+  - wget
+  - git
+  - jq
+  - python3
+  - lvm2
+  - device-mapper-persistent-data
+  - parted
+  - xfsprogs
+  - e2fsprogs
+  - podman
+  - buildah
+  - skopeo
+  - crun
+  - containers-common
+  - slirp4netns
+  - fuse-overlayfs
+  - conntrack-tools
+  - coreos-installer

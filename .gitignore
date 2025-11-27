@@ -1,3 +1,4 @@
 .vscode
 .env
-.setup_hv_rhel10.yaml
+vault.yml
+vault.yaml

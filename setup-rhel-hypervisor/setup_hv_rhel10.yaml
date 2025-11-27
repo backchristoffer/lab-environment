@@ -1,80 +1,13 @@
+# FILE: Day0_hypervisor_setup.yaml
 ---
-- name: Prepare RHEL 10 host for Virtualization and OpenShift
+- name: Prepare RHEL 10 host for Virtualization and OpenShift (Assisted Installer)
   hosts: all
   become: yes
 
-  vars:
-    ocp_version: "4.18.13"
-
-    rhel_repos:
-      - rhel-10-for-x86_64-baseos-rpms
-      - rhel-10-for-x86_64-appstream-rpms
-      - fast-datapath-for-rhel-10-x86_64-rpms
-
-    rhel_packages:
-      - qemu-kvm
-      - libvirt
-      - virt-install
-      - virt-manager
-      - virt-viewer
-      - libguestfs-tools
-      - edk2-ovmf
-      - dnsmasq
-      - nfs-utils
-      - NetworkManager
-      - firewalld
-      - iproute
-      - iputils
-      - bind-utils
-      - ethtool
-      - tcpdump
-      - policycoreutils
-      - policycoreutils-python-utils
-      - selinux-policy
-      - selinux-policy-targeted
-      - sos
-      - psacct
-      - kexec-tools
-      - bash-completion
-      - lsof
-      - sysstat
-      - dmidecode
-      - rsyslog
-      - chrony
-      - dnf-plugins-core
-      - subscription-manager
-      - tar
-      - gzip
-      - bzip2
-      - xz
-      - unzip
-      - curl
-      - wget
-      - git
-      - jq
-      - python3
-      - lvm2
-      - device-mapper-persistent-data
-      - parted
-      - xfsprogs
-      - e2fsprogs
-      - podman
-      - buildah
-      - skopeo
-      - crun
-      - containers-common
-      - slirp4netns
-      - fuse-overlayfs
-      - conntrack-tools
+  vars_files:
+    - group_vars/all/vars.yaml
 
   tasks:
-    - name: Ensure host is not a guest VM (optional but recommended)
-      assert:
-        that:
-          - ansible_virtualization_role != "guest"
-        fail_msg: "Host appears to be a guest VM, not suitable as a KVM hypervisor."
-        success_msg: "Host is not a guest; OK for KVM."
-
     - name: Enable required RH repositories
       rhsm_repository:
         name: "{{ rhel_repos }}"
@@ -108,6 +41,126 @@
         - firewalld
         - NetworkManager
 
+    - name: Create directory for OCP VM images
+      file:
+        path: "{{ ocp_vm_dir }}"
+        state: directory
+        owner: qemu
+        group: qemu
+        mode: "0750"
+        seuser: system_u
+        serole: object_r
+        setype: virt_image_t
+        selevel: s0
+
+    - name: Define libvirt storage pool for OCP VMs
+      community.libvirt.virt_pool:
+        name: "{{ ocp_libvirt_pool_name }}"
+        state: present
+        autostart: yes
+        xml: |
+          <pool type='dir'>
+            <name>{{ ocp_libvirt_pool_name }}</name>
+            <target>
+              <path>{{ ocp_vm_dir }}</path>
+            </target>
+          </pool>
+
+    - name: Ensure libvirt storage pool is started
+      community.libvirt.virt_pool:
+        name: "{{ ocp_libvirt_pool_name }}"
+        state: active
+        autostart: yes
+
+    - name: Ensure provisioning bridge connection exists
+      command: >
+        nmcli con add type bridge ifname {{ ocp_prov_bridge }}
+        con-name {{ ocp_prov_bridge }}
+        ipv4.addresses {{ ocp_prov_bridge_ip }}/{{ ocp_prov_bridge_prefix }}
+        ipv4.method manual ipv6.method ignore
+      args:
+        creates: "/etc/NetworkManager/system-connections/{{ ocp_prov_bridge }}.nmconnection"
+
+    - name: Ensure provisioning bridge has only primary IP
+      command: >
+        nmcli con mod {{ ocp_prov_bridge }}
+        ipv4.addresses {{ ocp_prov_bridge_ip }}/{{ ocp_prov_bridge_prefix }}
+
+    - name: Bring up provisioning bridge
+      command: nmcli con up "{{ ocp_prov_bridge }}"
+
+    - name: Ensure provisioning bridge interface is up
+      command: ip link set dev {{ ocp_prov_bridge }} up
+
+    - name: Put provisioning bridge into trusted firewalld zone
+      ansible.posix.firewalld:
+        interface: "{{ ocp_prov_bridge }}"
+        zone: trusted
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Enable masquerading for provisioning network
+      ansible.posix.firewalld:
+        zone: trusted
+        masquerade: yes
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Enable masquerading on external (public) zone
+      ansible.posix.firewalld:
+        zone: public
+        masquerade: yes
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Ensure IP forwarding is enabled
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        reload: yes
+
+    - name: Configure dnsmasq for OCP lab (Assisted Installer)
+      copy:
+        dest: /etc/dnsmasq.d/ocp-lab.conf
+        mode: "0644"
+        content: |
+          interface={{ ocp_prov_bridge }}
+          bind-dynamic
+          domain={{ cluster_name }}.{{ base_domain }}
+          expand-hosts
+          domain-needed
+          bogus-priv
+          dhcp-range=172.22.0.100,172.22.0.200,12h
+          dhcp-option=3,{{ ocp_prov_bridge_ip }}
+          dhcp-option=6,{{ ocp_prov_bridge_ip }}
+
+          # Static leases
+          {% for h in ocp_hosts %}
+          dhcp-host={{ h.mac }},{{ h.ip }},{{ h.name }}
+          {% endfor %}
+
+          # VIP DNS (VIPs managed by cluster/keepalived, NOT on hypervisor)
+          address=/api.{{ cluster_name }}.{{ base_domain }}/{{ api_vip }}
+          address=/api-int.{{ cluster_name }}.{{ base_domain }}/{{ api_vip }}
+          address=/.apps.{{ cluster_name }}.{{ base_domain }}/{{ ingress_vip }}
+
+    - name: Ensure localhost is first resolver
+      lineinfile:
+        path: /etc/resolv.conf
+        regexp: '^nameserver 127\.0\.0\.1$'
+        line: 'nameserver 127.0.0.1'
+        insertafter: BOF
+
+    - name: Enable and restart dnsmasq
+      service:
+        name: dnsmasq
+        enabled: yes
+        state: restarted
+
     - name: Create working directories
       file:
         path: "{{ item }}"
@@ -130,7 +183,8 @@
         url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ ocp_version }}/openshift-install-linux.tar.gz"
         dest: "/tmp/ocp-{{ ocp_version }}/installer/installer.tar.gz"
         mode: "0644"
-        force: no
+        force: yes
+
 
     - name: Extract oc client
       unarchive:
@@ -179,15 +233,8 @@
       register: kvm_modinfo
       changed_when: false
 
-    - name: Reboot host after installation
-      reboot:
-        reboot_timeout: 1200
-        connect_timeout: 30
-        post_reboot_delay: 60
-        test_command: whoami
-
-    - name: Print confirmation
+    - name: Print confirmation (Reboot manually if needed)
       debug:
         msg: >
-          RHEL 10 host fully prepared for virtualization and
-          OpenShift {{ ocp_version }}.
+          RHEL 10 host prepared for Assisted Installer: KVM, libvirt, NATed 172.22.0.0/24,
+          dnsmasq DHCP/DNS, and OCP client tools installed.
